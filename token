@@ -1,0 +1,136 @@
+#!/usr/bin/env python
+from argparse import ArgumentParser, RawTextHelpFormatter
+import subprocess as sp
+from os import path
+from glob import glob
+from tempfile import NamedTemporaryFile
+import shutil
+import time
+
+if __name__ == '__main__':
+  parser = ArgumentParser(description = '''\t=== Claim / release tokens for working files ===
+  The tokens are informational only. No enforce measure is implemented.
+  As such, race conditions are possible if multiple authors try to claim tokens simultaneously.
+  But this should be enough for normal paper writing process where authors are
+  reluctant to write / revise papers (which makes simultaneously claims of tokens rarely happen).
+
+  Remember to check remote before claiming tokens.
+  ''',
+  formatter_class=RawTextHelpFormatter)
+
+  parser.add_argument('-c', '--claim', dest = 'claim', metavar = 'FILE-TO-CLAIM', type = str, nargs = '+', help  = 'Claim tokens')
+  parser.add_argument('-r', '--release', dest = 'release', metavar = 'FILE-TO-RELEASE', type = str, nargs = '+', help = 'Release tokens')
+  parser.add_argument('-s', '--show', dest = 'show', action = 'store_true', default = False, help = 'Show tokens')
+  parser.add_argument('-i', '--init', dest = 'init', action = 'store_true', default = False, help = 'Initialize')
+
+  args = parser.parse_args()
+
+  DEFAULT_OWNER = 'NONE'
+  TOKEN = '.token'
+  DELIM = '#'
+
+  ##### init ####
+  if args.init:
+    if (path.exists(TOKEN)):
+      print 'Error! Already initialized!'
+      exit (1)
+
+    files = glob('*.tex')
+    if len(files) < 1:
+      print "Can not find any tex file"
+      exit(1)
+
+    localtime = time.asctime(time.localtime(time.time()))
+
+    with open(TOKEN, 'w') as t:
+      for f in files:
+        f = f.strip()
+        print >>t, "%s%s%s%s%s" % (f, DELIM, DEFAULT_OWNER, DELIM, localtime)
+
+    sp.check_call(['git', 'add', TOKEN])
+    sp.check_call(['git', 'commit', '-m', 'init .token'])
+    sp.check_call(['git', 'push', 'origin', 'master'])
+
+    exit(0)
+  ##### init end ####
+
+  if not path.exists(TOKEN):
+    print "\n%s\n" % "Missing .token file.".center(50, '-')
+    parser.print_help()
+    exit(1)
+
+  tokens = dict();
+
+  with open(TOKEN, 'r') as f:
+    for line in f:
+      line = line.strip()
+      filename, owner, timestamp = line.split(DELIM)
+      tokens[filename] = (owner, timestamp)
+
+  ### show ###
+  if args.show:
+    print "\n%s%s%s%s%s" % ("Filename".center(20, '-'), ": ", "Owner".center(20, '-'), ": ", "Since".center(24, '-'))
+    for (filename, (owner, timestamp)) in tokens.iteritems():
+      print "%-20s: %-20s: %s" % (filename, owner, timestamp)
+
+    exit(0)
+
+  if args.claim is None and args.release is None:
+    parser.print_help()
+    exit(1)
+  ### show end ###
+
+  AUTHOR = sp.check_output(['git', 'config', '--get', 'user.name'])
+  AUTHOR = AUTHOR.strip()
+
+  localtime = time.asctime(time.localtime(time.time()))
+
+  ### claim ###
+  if args.claim is not None:
+    for claim in args.claim:
+      if not tokens.has_key(claim):
+        print "Error! Can not claim token for non-exist file: %s" % claim
+        exit(1)
+
+      owner, timestamp = tokens[claim]
+      if owner != DEFAULT_OWNER:
+        print 'Error! File "%s" has already been claimed by %s' % (claim, owner)
+        exit(1)
+
+      tokens[claim] = (AUTHOR, localtime)
+  ### claim end ###
+
+  ### release ###
+  if args.release is not None:
+    for release in args.release:
+      if not tokens.has_key(release):
+        print "Error! Can not release token for non-exist file: %s" % release
+        exit(1)
+
+      owner, timestamp = tokens[release]
+      if owner != AUTHOR:
+        print "Error! You do not hold token for file: %s, it's owned by %s" % (release, owner)
+        exit(1)
+
+      tokens[release] = (DEFAULT_OWNER, localtime)
+  ### release end ###
+
+  ### update TOKEN file ###
+  temp = ""
+  with NamedTemporaryFile(delete = False) as tf:
+    temp = tf.name
+    for (filename, (owner, timestamp)) in tokens.iteritems():
+      print >>tf, "%s%s%s%s%s" % (filename, DELIM, owner, DELIM, timestamp)
+
+  if temp != "":
+    shutil.move(temp, TOKEN)
+
+  sp.check_call(['git', 'add', TOKEN])
+  msg = ""
+  if args.claim is not None:
+    msg += "Claims " + str(args.claim) + "\n"
+  if args.release is not None:
+    msg += "Releases " + str(args.release) + "\n"
+  sp.check_call(['git', 'commit', '-m', msg])
+  sp.check_call(['git', 'push', 'origin', 'master'])
+  ### update TOKEN file end ###
