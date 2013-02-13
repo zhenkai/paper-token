@@ -22,16 +22,20 @@ if __name__ == '__main__':
   parser.add_argument('-r', '--release', dest = 'release', metavar = 'FILE-TO-RELEASE', type = str, nargs = '+', help = 'Release tokens')
   parser.add_argument('-s', '--show', dest = 'show', action = 'store_true', default = False, help = 'Show tokens')
   parser.add_argument('-i', '--init', dest = 'init', action = 'store_true', default = False, help = 'Initialize')
+  parser.add_argument('-a', '--add', dest = 'add', metavar = 'FILE-TO-ADD', type = str, nargs = '+', help = 'Add file tokens')
+  parser.add_argument('-d', '--delete', dest = 'delete', metavar = 'FILE-To-DEL', type = str, nargs = '+', help = 'Delete file tokens')
+  parser.add_argument('-f', '--force', dest = 'force', action = 'store_true', default = False, help = 'Force update')
 
   args = parser.parse_args()
 
   DEFAULT_OWNER = 'NONE'
   TOKEN = '.token'
   DELIM = '#'
+  FORCE = args.force
 
   ##### init ####
   if args.init:
-    if (path.exists(TOKEN)):
+    if (path.exists(TOKEN)) and not FORCE:
       print 'Error! Already initialized!'
       exit (1)
 
@@ -75,7 +79,7 @@ if __name__ == '__main__':
 
     exit(0)
 
-  if args.claim is None and args.release is None:
+  if args.claim is None and args.release is None and args.add is None and args.delete is None:
     parser.print_help()
     exit(1)
   ### show end ###
@@ -84,6 +88,30 @@ if __name__ == '__main__':
   AUTHOR = AUTHOR.strip()
 
   localtime = time.asctime(time.localtime(time.time()))
+  ### add token ###
+  if args.add is not None:
+    for add in args.add:
+      if tokens.has_key(add):
+        print "Error! Token already exists: %s " % add
+        exit(1)
+
+      tokens[add] = (DEFAULT_OWNER, localtime)
+  ### add token end ###
+
+  ### delete token ###
+  if args.delete is not None:
+    for delete in args.delete:
+      if not tokens.has_key(delete):
+        print "Error! Can not delete non-exist token: %s " % delete
+        exit(1)
+
+      owner, timestamp = tokens[delete]
+      if owner != AUTHOR and not FORCE:
+        print "Error! You do not holde token for file: %s, it's owned by %s " % (delete, owner)
+        exit(1)
+
+      del tokens[delete]
+  ### delete token end ###
 
   ### claim ###
   if args.claim is not None:
@@ -93,7 +121,7 @@ if __name__ == '__main__':
         exit(1)
 
       owner, timestamp = tokens[claim]
-      if owner != DEFAULT_OWNER:
+      if owner != DEFAULT_OWNER and not FORCE:
         print 'Error! File "%s" has already been claimed by %s' % (claim, owner)
         exit(1)
 
@@ -108,7 +136,7 @@ if __name__ == '__main__':
         exit(1)
 
       owner, timestamp = tokens[release]
-      if owner != AUTHOR:
+      if owner != AUTHOR and not FORCE:
         print "Error! You do not hold token for file: %s, it's owned by %s" % (release, owner)
         exit(1)
 
@@ -131,6 +159,10 @@ if __name__ == '__main__':
     msg += "Claims " + str(args.claim) + "\n"
   if args.release is not None:
     msg += "Releases " + str(args.release) + "\n"
+  if args.add is not None:
+    msg += "Adds " + str(args.add) + "\n"
+  if args.delete is not None:
+    msg += "Deletes " + str(args.delete) + "\n"
   sp.check_call(['git', 'commit', '-m', msg])
   sp.check_call(['git', 'push', 'origin', 'master'])
   ### update TOKEN file end ###
