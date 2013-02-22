@@ -3,6 +3,9 @@
 GIT=git
 
 TOKEN_FILE=".token"
+NOBODY="NOBODY"
+AUTHOR=$($GIT config --get user.name)
+
 SHOW=false
 INIT=false
 
@@ -76,7 +79,7 @@ function check_init {
   $GIT branch | grep -q $BRANCH
 }
 
-function stash_if_need {
+function stash_if_needed {
   $GIT status | grep -q "nothing to commit"
   if [ $? -ne 0 ]
   then
@@ -98,6 +101,17 @@ function cpad {
     fi
   done
   echo $word
+}
+
+function clean_up {
+  $GIT reset --hard HEAD
+  $GIT checkout $CURRENT_BRANCH
+
+  # stashed
+  if $1
+  then
+    $GIT stash pop
+  fi
 }
 
 while [ $# -gt 0 ]
@@ -176,7 +190,7 @@ then
   stashed=$(stash_if_needed)
   $GIT branch $BRANCH
   $GIT checkout $BRANCH
-  touch $TOKEN_FILE
+  printf "%-20s: %-20s: %s\n" $(cpad Filename 20 -) $(cpad Owner 20 -) $(cpad Since 28 -) > $TOKEN_FILE
   $GIT add $TOKEN_FILE
   $GIT commit -m "init token"
   $GIT push origin $BRANCH
@@ -189,21 +203,114 @@ then
   exit 0
 fi
 
+TMP="/tmp/paper_token_$(date +%s)"
+$GIT show $BRANCH:.token > $TMP
+
 if $SHOW
 then
-  TMP=/tmp/paper_token
-  $GIT show $BRANCH:.token > $TMP
+  check_init || echo "Error: not initialized!" && exit 1
+
   if [ $? -ne 0 ]
   then
     echo "Fatal: .token file does not exist"
     exit 1
   fi
-  printf "%-20s: %-20s: %s\n" $(cpad Filename 20 -) $(cpad Owner 20 -) $(cpad Since 20 -)
+  cat $TOKEN_FILE
+  exit 0
 fi
 
-echo "ADD:" ${ADD_LIST[@]}
-echo "DELETE:" ${DELETE_LIST[@]}
-echo "CLAIM:" ${CLAIM_LIST[@]}
-echo "RELEASE:" ${RELEASE_LIST[@]}
+if [ ${#ADD_LIST[@]} -eq 0 ] && [ ${#DELETE_LIST[@]} -eq 0 ] && [ ${#CLAIM_LIST[@]} -eq 0 ] && [ ${#RELEASE_LIST[@]} -eq 0 ]
+then
+  usage
+fi
+##### Preliminary Sanity check for file lists #####
+##### Conflicts not checked #####
 
+# file must exists to be added
+for af in ${ADD_LIST[@]}
+do
+  if [ ! -e $af ]
+  then
+    echo "Error: cannot add file. File does not exist: $af"
+    exit 1
+  fi
+  grep -q "$af" $TOKEN_FILE || echo "Token $af already existed" && exit 1
+done
 
+# file must be in .token and user owns the token
+# in order to delete or release
+for drf in ${DELETE_LIST[@]} ${RELEASE_LIST[@]}
+do
+  egrep -q "$drf\s*:\s*$AUTHOR\s*:" $TOKEN_FILE && echo "Token $drf does not exist or you don't own the token" && exit 1
+done
+
+# file must be in .token and NOBODY owns the token
+# in order to claim token
+for cf in ${CLAIM_LIST[@]}
+do
+  egrep -q "$cf\s*:\s*$NOBODY\s*:" $TOKEN_FILE && echo "Token $cf already taken by others" && exit 1
+done
+
+#### Now ready for the actual changes ####
+NEED_STASH_POP=false
+
+trap "clean_up $NEED_STASH_POP" 0
+
+NEED_STASH_POP=$(stash_if_needed)
+$GIT checkout $BRANCH
+# use the .token file on server as authorative
+$GIT pull -f origin $BRANCH
+$GIT rebase $CURRENT_BRANCH
+
+# should be safe to add all tokens in list
+for af in ${ADD_LIST[@]}
+do
+  printf "%-20s: %-20s: %s\n" $(cpad $af 20 -) $(cpad "$NOBODY" 20 -) $(cpad "$(date)" 28 -) >> $TOKEN_FILE
+done
+
+# should be safe  to delete all tokens in list
+for df in ${DELETE_LIST[@]}
+do
+  sed -i ".bak" "/$df/d" $TOKEN_FILE
+done
+
+# should be safe to claim all tokens in list
+for cf in ${CLAIM_LIST[@]}
+do
+  line=$(printf "%-20s: %-20s: %s" $cf "$AUTHOR" "$(date)")
+  sed -i ".bak" "s/$cf[[:space:]]*:[[:space:]]*$NOBODY[[:space:]]*:.*/$line/" $TOKEN_FILE
+done
+
+for rf in ${RELEASE_LIST[@]}
+do
+  # double check the token still exists
+  grep -q "$rf" $TOKEN_FILE && echo "Token $rf already deleted!" && exit 1
+  line=$(printf "%-20s: %-20s: %s" $cf "$NOBODY" "$(date)")
+  sed -i ".bak" "s/$cf[[:space:]]*:[[:space:]]*$AUTHOR[[:space:]]*:.*/$line/" $TOKEN_FILE
+done
+
+$GIT add $TOKEN_FILE
+
+MSG="$AUTHOR"
+if [ ${#ADD_LIST[@]} -gt 0 ]
+then
+  MSG="$MSG adds ${ADD_LIST[@]}\n"
+fi
+if [ ${#DELETE_LIST[@]} -gt 0 ]
+then
+  MSG="$MSG deletes ${DELETE_LIST[@]}\n"
+fi
+if [ ${#CLAIM_LIST[@]} -gt 0 ]
+then
+  MSG="$MSG claims ${CLAIM_LIST[@]}\n"
+fi
+if [ ${#RELEASE_LIST[@]} -gt 0 ]
+then
+  MSG="$MSG releases ${ADD_LIST[@]}"
+fi
+
+$GIT commit -m "$MSG"
+$GIT push -f origin $BRANCH
+
+cat $TOKEN_FILE
+exit 0
