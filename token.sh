@@ -3,7 +3,7 @@
 GIT=git
 
 TOKEN_FILE=".token"
-NOBODY="NOBODY"
+NOBODY="NULL"
 AUTHOR=$($GIT config --get user.name)
 
 SHOW=false
@@ -77,13 +77,22 @@ function set_cmd {
 
 function check_init {
   $GIT branch | grep -q $BRANCH
+  if [ $? -eq 0 ]
+  then
+    echo "true"
+  else
+    echo "false"
+  fi
 }
 
 function stash_if_needed {
-  $GIT status | grep -q "nothing to commit"
-  if [ $? -ne 0 ]
+  $GIT diff --exit-code --quiet
+  res1=$?
+  $GIT diff --cached --exit-code --quiet
+  res2=$?
+  if [ $res1 -ne 0 ] || [ $res2 -ne 0 ]
   then
-    $GIT stash
+    $GIT stash --quiet
     echo "true"
   else
     echo "false"
@@ -185,17 +194,18 @@ done
 
 if $INIT
 then
-  echo "INIT"
-  check_init && echo "Error: already initiated!" && exit 1
-  stashed=$(stash_if_needed)
+  $(check_init) && echo "Error: already initiated!" && exit 1
+  STASHED=$(stash_if_needed)
   $GIT branch $BRANCH
   $GIT checkout $BRANCH
   printf "%-20s: %-20s: %s\n" $(cpad Filename 20 -) $(cpad Owner 20 -) $(cpad Since 28 -) > $TOKEN_FILE
   $GIT add $TOKEN_FILE
   $GIT commit -m "init token"
-  $GIT push origin $BRANCH
+  $GIT push -f origin $BRANCH
   $GIT checkout $CURRENT_BRANCH
-  if $stashed
+
+  echo "STASHED is $STASHED"
+  if $STASHED
   then
     $GIT stash pop
   fi
@@ -203,19 +213,23 @@ then
   exit 0
 fi
 
+if ! $(check_init)
+then
+  echo "Error: not initialized!" && exit 1
+fi
+
 TMP="/tmp/paper_token_$(date +%s)"
-$GIT show $BRANCH:.token > $TMP
+$GIT show $BRANCH:$TOKEN_FILE > $TMP
 
 if $SHOW
 then
-  check_init || echo "Error: not initialized!" && exit 1
-
-  if [ $? -ne 0 ]
+  echo "SHOWING"
+  if [ ! -e $TMP ]
   then
     echo "Fatal: .token file does not exist"
     exit 1
   fi
-  cat $TOKEN_FILE
+  cat $TMP
   exit 0
 fi
 
@@ -234,21 +248,33 @@ do
     echo "Error: cannot add file. File does not exist: $af"
     exit 1
   fi
-  grep -q "$af" $TOKEN_FILE || echo "Token $af already existed" && exit 1
+  grep -q "$af" $TMP
+  if [ $? -eq 0 ]
+  then
+    echo "Token $af already existed" && exit 1
+  fi
 done
 
 # file must be in .token and user owns the token
 # in order to delete or release
 for drf in ${DELETE_LIST[@]} ${RELEASE_LIST[@]}
 do
-  egrep -q "$drf\s*:\s*$AUTHOR\s*:" $TOKEN_FILE && echo "Token $drf does not exist or you don't own the token" && exit 1
+  egrep -q "$drf\s*:\s*$AUTHOR\s*:" $TMP
+  if [ $? -ne 0 ]
+  then
+    echo "Token $drf does not exist or you don't own the token" && exit 1
+  fi
 done
 
 # file must be in .token and NOBODY owns the token
 # in order to claim token
 for cf in ${CLAIM_LIST[@]}
 do
-  egrep -q "$cf\s*:\s*$NOBODY\s*:" $TOKEN_FILE && echo "Token $cf already taken by others" && exit 1
+  egrep -q "$cf\s*:\s*$NOBODY\s*:" $TMP
+  if [ $? -ne 0 ]
+  then
+    echo "Token $cf already taken by others" && exit 1
+  fi
 done
 
 #### Now ready for the actual changes ####
@@ -265,7 +291,7 @@ $GIT rebase $CURRENT_BRANCH
 # should be safe to add all tokens in list
 for af in ${ADD_LIST[@]}
 do
-  printf "%-20s: %-20s: %s\n" $(cpad $af 20 -) $(cpad "$NOBODY" 20 -) $(cpad "$(date)" 28 -) >> $TOKEN_FILE
+  printf "%-20s: %-20s: %s\n" $af "$NOBODY" "$(date)" >> $TOKEN_FILE
 done
 
 # should be safe  to delete all tokens in list
@@ -284,9 +310,13 @@ done
 for rf in ${RELEASE_LIST[@]}
 do
   # double check the token still exists
-  grep -q "$rf" $TOKEN_FILE && echo "Token $rf already deleted!" && exit 1
-  line=$(printf "%-20s: %-20s: %s" $cf "$NOBODY" "$(date)")
-  sed -i ".bak" "s/$cf[[:space:]]*:[[:space:]]*$AUTHOR[[:space:]]*:.*/$line/" $TOKEN_FILE
+  grep -q "$rf" $TOKEN_FILE
+  if [ $? -ne 0 ]
+  then
+    echo "Token $rf already deleted!" && exit 1
+  fi
+  line=$(printf "%-20s: %-20s: %s" $rf "$NOBODY" "$(date)")
+  sed -i ".bak" "s/$rf[[:space:]]*:[[:space:]]*$AUTHOR[[:space:]]*:.*/$line/" $TOKEN_FILE
 done
 
 $GIT add $TOKEN_FILE
@@ -294,15 +324,15 @@ $GIT add $TOKEN_FILE
 MSG="$AUTHOR"
 if [ ${#ADD_LIST[@]} -gt 0 ]
 then
-  MSG="$MSG adds ${ADD_LIST[@]}\n"
+  MSG="$MSG adds ${ADD_LIST[@]}"
 fi
 if [ ${#DELETE_LIST[@]} -gt 0 ]
 then
-  MSG="$MSG deletes ${DELETE_LIST[@]}\n"
+  MSG="$MSG deletes ${DELETE_LIST[@]}"
 fi
 if [ ${#CLAIM_LIST[@]} -gt 0 ]
 then
-  MSG="$MSG claims ${CLAIM_LIST[@]}\n"
+  MSG="$MSG claims ${CLAIM_LIST[@]}"
 fi
 if [ ${#RELEASE_LIST[@]} -gt 0 ]
 then
