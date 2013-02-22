@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+GIT=git
+
+TOKEN_FILE=".token"
 SHOW=false
 INIT=false
 
@@ -7,6 +10,9 @@ ADD_LIST=()
 DELETE_LIST=()
 CLAIM_LIST=()
 RELEASE_LIST=()
+
+BRANCH="ignore-this-branch-token-only"
+CURRENT_BRANCH="master"
 
 function usage {
   cat << EOF
@@ -64,6 +70,21 @@ function set_cmd {
   fi
 
   CURRENT_CMD=$1
+}
+
+function check_init {
+  $GIT branch | grep -q $BRANCH
+}
+
+function stash_if_need {
+  $GIT status | grep -q "nothing to commit"
+  if [ $? -ne 0 ]
+  then
+    $GIT stash
+    echo "true"
+  else
+    echo "false"
+  fi
 }
 
 while [ $# -gt 0 ]
@@ -134,6 +155,24 @@ do
       ;;
   esac
 done
+
+if [ $INIT ]
+then
+  check_init && echo "Error: already initiated!" && exit 1
+  stashed=$(stash_if_needed)
+  $GIT branch $BRANCH
+  $GIT checkout $BRANCH
+  touch $TOKEN_FILE
+  $GIT add $TOKEN_FILE
+  $GIT commit -m "init token"
+  $GIT push origin $BRANCH
+  $GIT checkout $CURRENT_BRANCH
+  if [ $stashed ]
+  then
+    $GIT stash pop
+  fi
+  echo "Initialized token. Now you can add and claim tokens."
+fi
 
 echo "ADD:" ${ADD_LIST[@]}
 echo "DELETE:" ${DELETE_LIST[@]}
