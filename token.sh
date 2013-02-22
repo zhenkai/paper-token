@@ -87,6 +87,19 @@ function stash_if_need {
   fi
 }
 
+function cpad {
+  word=$1
+  while [ ${#word} -lt $2 ]
+  do
+    word="$word$3";
+    if [ ${#word} -lt $2 ]
+    then
+      word="$3$word"
+    fi
+  done
+  echo $word
+}
+
 while [ $# -gt 0 ]
 do
   case $1 in
@@ -156,8 +169,9 @@ do
   esac
 done
 
-if [ $INIT ]
+if $INIT
 then
+  echo "INIT"
   check_init && echo "Error: already initiated!" && exit 1
   stashed=$(stash_if_needed)
   $GIT branch $BRANCH
@@ -167,11 +181,24 @@ then
   $GIT commit -m "init token"
   $GIT push origin $BRANCH
   $GIT checkout $CURRENT_BRANCH
-  if [ $stashed ]
+  if $stashed
   then
     $GIT stash pop
   fi
   echo "Initialized token. Now you can add and claim tokens."
+  exit 0
+fi
+
+if $SHOW
+then
+  TMP=/tmp/paper_token
+  $GIT show $BRANCH:.token > $TMP
+  if [ $? -ne 0 ]
+  then
+    echo "Fatal: .token file does not exist"
+    exit 1
+  fi
+  printf "%-20s: %-20s: %s\n" $(cpad Filename 20 -) $(cpad Owner 20 -) $(cpad Since 20 -)
 fi
 
 echo "ADD:" ${ADD_LIST[@]}
