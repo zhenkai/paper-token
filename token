@@ -221,6 +221,11 @@ then
   exit 0
 fi
 
+if ! $SHOW && [ ${#ADD_LIST[@]} -eq 0 ] && [ ${#DELETE_LIST[@]} -eq 0 ] && [ ${#CLAIM_LIST[@]} -eq 0 ] && [ ${#RELEASE_LIST[@]} -eq 0 ]
+then
+  usage
+fi
+
 if ! $(check_init)
 then
   echo "Error: not initialized!" && exit 1
@@ -248,10 +253,6 @@ then
   exit 0
 fi
 
-if [ ${#ADD_LIST[@]} -eq 0 ] && [ ${#DELETE_LIST[@]} -eq 0 ] && [ ${#CLAIM_LIST[@]} -eq 0 ] && [ ${#RELEASE_LIST[@]} -eq 0 ]
-then
-  usage
-fi
 
 # file must exists to be added
 for af in ${ADD_LIST[@]}
