@@ -81,6 +81,15 @@ function check_init {
   then
     echo "true"
   else
+    $GIT branch -r | grep -q $BRANCH
+    if [ $? -eq 0 ]
+    then
+      $GIT checkout --quiet --track -b $BRANCH origin/$BRANCH
+      if [ $? -eq 0 ]
+      then
+        echo "true"
+      fi
+    fi
     echo "false"
   fi
 }
@@ -113,13 +122,13 @@ function cpad {
 }
 
 function clean_up {
-  $GIT reset --hard HEAD
-  $GIT checkout $CURRENT_BRANCH
+  $GIT reset --hard HEAD --quiet
+  $GIT checkout $CURRENT_BRANCH --quiet
 
   # stashed
   if $1
   then
-    $GIT stash pop
+    $GIT stash pop --quiet
   fi
 }
 
@@ -196,18 +205,17 @@ if $INIT
 then
   $(check_init) && echo "Error: already initiated!" && exit 1
   STASHED=$(stash_if_needed)
-  $GIT branch $BRANCH
-  $GIT checkout $BRANCH
-  printf "%-20s: %-20s: %s\n" $(cpad Filename 20 -) $(cpad Owner 20 -) $(cpad Since 28 -) > $TOKEN_FILE
+  $GIT branch $BRANCH --quiet
+  $GIT checkout $BRANCH --quiet
+  printf "%-25s: %-25s: %s\n" $(cpad Filename 25 -) $(cpad Owner 25 -) $(cpad Since 29 -) > $TOKEN_FILE
   $GIT add $TOKEN_FILE
-  $GIT commit -m "init token"
-  $GIT push -f origin $BRANCH
-  $GIT checkout $CURRENT_BRANCH
+  $GIT commit -m "init token" --quiet
+  $GIT push -f origin $BRANCH --quiet
+  $GIT checkout $CURRENT_BRANCH --quiet
 
-  echo "STASHED is $STASHED"
   if $STASHED
   then
-    $GIT stash pop
+    $GIT stash pop --quiet
   fi
   echo "Initialized token. Now you can add and claim tokens."
   exit 0
@@ -218,18 +226,25 @@ then
   echo "Error: not initialized!" && exit 1
 fi
 
-TMP="/tmp/paper_token_$(date +%s)"
-$GIT show $BRANCH:$TOKEN_FILE > $TMP
+NEED_STASH_POP=false
+
+trap "clean_up $NEED_STASH_POP" 0
+
+NEED_STASH_POP=$(stash_if_needed)
+$GIT checkout $BRANCH --quiet
+# use the .token file on server as authorative
+$GIT pull -f origin $BRANCH --quiet >/dev/null
+$GIT merge -s recursive -X theirs $CURRENT_BRANCH --quiet --no-edit >/dev/null
 
 if $SHOW
 then
   echo "SHOWING"
-  if [ ! -e $TMP ]
+  if [ ! -e $TOKEN_FILE ]
   then
     echo "Fatal: .token file does not exist"
     exit 1
   fi
-  cat $TMP
+  cat $TOKEN_FILE
   exit 0
 fi
 
@@ -237,8 +252,6 @@ if [ ${#ADD_LIST[@]} -eq 0 ] && [ ${#DELETE_LIST[@]} -eq 0 ] && [ ${#CLAIM_LIST[
 then
   usage
 fi
-##### Preliminary Sanity check for file lists #####
-##### Conflicts not checked #####
 
 # file must exists to be added
 for af in ${ADD_LIST[@]}
@@ -248,7 +261,7 @@ do
     echo "Error: cannot add file. File does not exist: $af"
     exit 1
   fi
-  grep -q "$af" $TMP
+  egrep -q "^$af\s*:" $TOKEN_FILE
   if [ $? -eq 0 ]
   then
     echo "Token $af already existed" && exit 1
@@ -259,7 +272,7 @@ done
 # in order to delete or release
 for drf in ${DELETE_LIST[@]} ${RELEASE_LIST[@]}
 do
-  egrep -q "$drf\s*:\s*$AUTHOR\s*:" $TMP
+  egrep -q "^$drf\s*:\s*$AUTHOR\s*:" $TOKEN_FILE
   if [ $? -ne 0 ]
   then
     echo "Token $drf does not exist or you don't own the token" && exit 1
@@ -270,52 +283,42 @@ done
 # in order to claim token
 for cf in ${CLAIM_LIST[@]}
 do
-  egrep -q "$cf\s*:\s*$NOBODY\s*:" $TMP
+  egrep -q "^$cf\s*:\s*$NOBODY\s*:" $TOKEN_FILE
   if [ $? -ne 0 ]
   then
     echo "Token $cf already taken by others" && exit 1
   fi
 done
 
-#### Now ready for the actual changes ####
-NEED_STASH_POP=false
-
-trap "clean_up $NEED_STASH_POP" 0
-
-NEED_STASH_POP=$(stash_if_needed)
-$GIT checkout $BRANCH
-# use the .token file on server as authorative
-$GIT pull -f origin $BRANCH
-$GIT rebase $CURRENT_BRANCH
-
 # should be safe to add all tokens in list
 for af in ${ADD_LIST[@]}
 do
-  printf "%-20s: %-20s: %s\n" $af "$NOBODY" "$(date)" >> $TOKEN_FILE
+  printf "%-25s: %-25s: %s\n" $af "$NOBODY" "$(date)" >> $TOKEN_FILE
 done
 
 # should be safe  to delete all tokens in list
 for df in ${DELETE_LIST[@]}
 do
-  sed -i ".bak" "/$df/d" $TOKEN_FILE
+  sed -i ".bak" "/^$df[[:space:]]*:/d" $TOKEN_FILE
 done
 
 # should be safe to claim all tokens in list
 for cf in ${CLAIM_LIST[@]}
 do
-  line=$(printf "%-20s: %-20s: %s" $cf "$AUTHOR" "$(date)")
+  line=$(printf "%-25s: %-25s: %s" $cf "$AUTHOR" "$(date)")
   sed -i ".bak" "s/$cf[[:space:]]*:[[:space:]]*$NOBODY[[:space:]]*:.*/$line/" $TOKEN_FILE
 done
 
 for rf in ${RELEASE_LIST[@]}
 do
   # double check the token still exists
-  grep -q "$rf" $TOKEN_FILE
+  egrep -q "^$rf\s*:" $TOKEN_FILE
   if [ $? -ne 0 ]
   then
+    cat $TOKEN_FILE
     echo "Token $rf already deleted!" && exit 1
   fi
-  line=$(printf "%-20s: %-20s: %s" $rf "$NOBODY" "$(date)")
+  line=$(printf "%-25s: %-25s: %s" $rf "$NOBODY" "$(date)")
   sed -i ".bak" "s/$rf[[:space:]]*:[[:space:]]*$AUTHOR[[:space:]]*:.*/$line/" $TOKEN_FILE
 done
 
@@ -336,11 +339,11 @@ then
 fi
 if [ ${#RELEASE_LIST[@]} -gt 0 ]
 then
-  MSG="$MSG releases ${ADD_LIST[@]}"
+  MSG="$MSG releases ${RELEASE_LIST[@]}"
 fi
 
-$GIT commit -m "$MSG"
-$GIT push -f origin $BRANCH
+$GIT commit -m "$MSG" --quiet
+$GIT push -f origin $BRANCH --quiet
 
 cat $TOKEN_FILE
 exit 0
